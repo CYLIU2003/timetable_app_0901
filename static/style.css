@@ -59,6 +59,7 @@ body{zoom:100%}
 #status-list{list-style:none;overflow-y:auto;padding-left:0;height:auto;max-height:none}
 #status-list li{display:flex;align-items:center;gap:.4em;font-size:var(--fs-status);margin:.3vh 0}
 .status-logo{height:1.6em;width:auto}
+.status-meta{font-size:var(--fs-news);opacity:.72;text-align:right;margin-top:.4vh;min-height:1.2em}
 
 #weather-card{border-color:#009bdc}
 #weather-card h2{font-size:var(--fs-lg);margin-bottom:.5vh}

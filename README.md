@@ -17,11 +17,13 @@
     - 「1時間以内」→「24時間以内」の便を表示するように拡大。
     - バス時刻表（Excel）はシート名・列名のミスマッチをデバッグ出力で確認可能。
     - ROUTES定義の`sheet_direction`や`column`は、実際のExcelシート名・列名に合わせて調整してください。
+    - ODPT APIキーは環境変数 `ODPT_API_KEY_MAIN` / `ODPT_API_KEY_CHALLENGE` で設定してください。
 
 ### 2. 運行情報API `/api/status`
 #### 概要
 - 複数事業者（東急・東京メトロ・都営地下鉄・横浜市交・JR東日本・東武鉄道）の運行情報をまとめて取得し、異常時のみ詳細を表示。全て平常時は「平常運転」と事業者ごとに表示。
-- レスポンスは `{"status": [...]}` 形式の配列で、フロントエンド（`static/app.js`）と連携。
+- ODPT 生データは Rust のポーラーが 5 分または 10 分間隔で SQLite キャッシュに保存し、Flask はそのキャッシュを高速に読み出します。
+- レスポンスは `{"status": [...]}` 形式の配列で、フロントエンド（`static/app.js`）と連携。`updated_at` と `source` も返し、カード下部に更新時刻を表示します。
 
 #### 取得ロジック
 - **東急電鉄**: ODPT API（チャレンジAPI）で取得。API失敗時は公式サイトHTMLを自動スクレイピングしてフォールバック。
@@ -69,7 +71,7 @@ app_20250808_remote/
 - その他、必要に応じてファイルを追加してください。
 
 ## 注意事項
-- ODPT APIキーはソース内で明示的に分離管理されています。
+- ODPT APIキーは環境変数で管理してください。
 - 東急運行情報はAPI障害時もHTMLフォールバックで高可用性。
 - Toei GTFS-RT（リアルタイム遅延アラート）は2025年7月時点で未対応です。
 - **バス時刻表（Excel）はシート名・列名のミスマッチに注意。サーバログのデバッグ出力を参考にROUTES定義を調整してください。**
@@ -77,9 +79,26 @@ app_20250808_remote/
 ## 起動方法
 1. 必要なPythonパッケージをインストール
    - `pip install flask pandas requests beautifulsoup4 feedparser openpyxl`
-2. `timetable_data/`に必要なCSV/Excelを配置
-3. サーバ起動
-   - `python timetable_app.py`
+2. Rust toolchain をインストール
+  - `winget install -e --id Rustlang.Rustup`
+  - `cargo` 実行時は `C:\msys64\mingw64\bin` を PATH に含めるか、MSYS2 MinGW x64 シェルを使ってください。
+3. ODPT APIキーを環境変数に設定
+  - `ODPT_API_KEY_MAIN`
+  - `ODPT_API_KEY_CHALLENGE`
+4. 必要ならポーラー間隔を設定
+  - `ODPT_POLL_INTERVAL_SECONDS=300` で 5 分
+  - `ODPT_POLL_INTERVAL_SECONDS=600` で 10 分
+5. `rust/odpt_poller` でビルド
+  - `cargo build --release`
+  - 出力は `rust/odpt_poller/target/x86_64-pc-windows-gnu/release/odpt_poller.exe` です。
+6. `timetable_data/`に必要なCSV/Excelを配置
+7. サーバ起動
+  - `python timetable_app.py`
+
+### ODPT ポーラー
+- Flask は `ODPT_POLLER_EXECUTABLE` に指定した Rust バイナリが存在する場合、自動で起動します。
+- 既定の DB は `runtime/odpt_status.db` です。
+- 自動起動を止めたい場合は `ODPT_POLLER_AUTO_START=0` を設定してください。
 
 ## ライセンス
 MIT License

@@ -54,10 +54,13 @@ document.addEventListener("DOMContentLoaded", () => {
   
     const routeBox = $("route-selector-container");
     const maxStatusLinesInput = document.getElementById('max-status-lines-input');
+    const statusMeta = $("status-meta");
   
     /* ─────────── グローバル状態 ─────────── */
     const timers = new Set();          // すべての setInterval ID
-    let statusArr = [], statusIdx = 0; // 運行情報
+    let statusArr = [];                // 運行情報
+    let statusPageIdx = 0;             // 現在ページ
+    let statusTotalPages = 0;          // 総ページ数
     let newsArr   = [], newsIdx   = -1;// ニュース
     let scheduleJson = {};            // /api/schedule 結果
     let routesInit   = false;         // routeBox 生成済み?
@@ -141,9 +144,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   
     /* ============================ 運行情報 ============================ */
-    // グローバル状態変数 statusArr はそのまま、statusIdx はページインデックスとして再利用
-    let statusPageIdx = 0; 
-  
     // 表示を更新するメイン関数
     function drawStatus() {
       const ul = $("status-list");
@@ -159,17 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
   
-      // 設定から表示する行数を取得
-      const linesPerPage = parseInt($("max-status-lines-input")?.value || 2, 10);
-      
-      // 表示するべきページの開始位置を計算
-      const start = statusPageIdx * linesPerPage;
-      
-      // 配列から現在のページに表示する要素を切り出す
-      const itemsToShow = statusArr.slice(start, start + linesPerPage);
-  
-      // 切り出した要素をリストに描画
-      itemsToShow.forEach(it => {
+      statusArr.forEach(it => {
         const li = document.createElement("li");
         li.className = "status-item";
         if (it.logo) {
@@ -183,32 +173,42 @@ document.addEventListener("DOMContentLoaded", () => {
         ul.appendChild(li);
       });
     }
+
+    function setStatusMeta(data) {
+      if (!statusMeta) return;
+
+      const updatedAt = data?.updated_at ? new Date(data.updated_at) : null;
+      const updatedLabel = updatedAt && !Number.isNaN(updatedAt.getTime())
+        ? `更新 ${updatedAt.toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+        : "更新時刻不明";
+      const sourceLabel = data?.source === "live" ? "ライブ取得" : data?.source === "cache" ? "Rustキャッシュ" : data?.source === "unavailable" ? "取得待ち" : "DBキャッシュ";
+
+      statusMeta.textContent = `${updatedLabel} / ${sourceLabel}`;
+    }
   
     // 4秒ごとにページを切り替える関数
     function cycleStatusPage() {
-      if (!statusArr || statusArr.length === 0) return;
-      
-      const linesPerPage = parseInt($("max-status-lines-input")?.value || 2, 10);
-      const totalPages = Math.ceil(statusArr.length / linesPerPage);
-  
-      if (totalPages > 1) {
-        statusPageIdx = (statusPageIdx + 1) % totalPages;
+      if (statusTotalPages > 1) {
+        statusPageIdx = (statusPageIdx + 1) % statusTotalPages;
       } else {
         statusPageIdx = 0;
       }
-      
-      drawStatus();
+
+      loadStatus();
     }
   
     // サーバーから最新の運行情報を読み込む関数
     const loadStatus = () => {
-      const maxLines = maxStatusLinesInput.value || 2;
-      jFetch(`/api/status?max_lines=${maxLines}`, { cache: 'no-store' })
+      const pageSize = parseInt(maxStatusLinesInput?.value || 2, 10) || 2;
+      jFetch(`/api/status?page=${statusPageIdx}&page_size=${pageSize}`, { cache: 'no-store' })
         .then(data => {
           if (!data || !data.status) {
             console.error("運行情報データが不正です:", data);
+            setStatusMeta({ source: "unavailable" });
             return;
           }
+          statusPageIdx = typeof data.page === 'number' ? data.page : statusPageIdx;
+          statusTotalPages = typeof data.total_pages === 'number' ? data.total_pages : 0;
           statusArr = data.status.map(item => {
             // logoがパス文字列の場合、完全なURLを生成する
             if (item.logo && typeof item.logo === 'string' && !item.logo.startsWith('http')) {
@@ -216,11 +216,8 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             return item;
           });
-          statusIdx = 0;
-          if (timers.size === 0) { // 初回またはリセット後
-            drawStatus();
-            timers.add(setInterval(cycleStatusPage, 4000));  // 4秒ごとにページ切替
-          }
+          drawStatus();
+          setStatusMeta(data);
         })
         .catch(err => console.error("運行情報の取得に失敗:", err));
     };
@@ -396,6 +393,13 @@ document.addEventListener("DOMContentLoaded", () => {
   
     btnSet  .addEventListener("click",()=>{modal.classList.add("active"); clearAllTimers();});
     btnClose.addEventListener("click",()=>{modal.classList.remove("active"); startTimers();});
+
+    if (maxStatusLinesInput) {
+      maxStatusLinesInput.addEventListener("change",()=>{
+        statusPageIdx = 0;
+        loadStatus();
+      });
+    }
   
     /* ============================ タイマー管理 ============================ */
     function addTimer(id){timers.add(id);}
@@ -403,7 +407,6 @@ document.addEventListener("DOMContentLoaded", () => {
     function startTimers() {
       addTimer(setInterval(updateClock, 1000));
       addTimer(setInterval(cycleStatusPage, 4000)); // ★★★ 4秒ごとにページ切替
-      addTimer(setInterval(loadStatus, 60000));
       addTimer(setInterval(loadWeather, 600000));
       addTimer(setInterval(loadSchedule, 30000));
       addTimer(setInterval(loadNews, 30000));

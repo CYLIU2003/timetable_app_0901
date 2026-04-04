@@ -42,13 +42,12 @@
       <h3>表示項目</h3>
       <div class="setting-item"><label><input type="checkbox" id="toggle-status"   checked> 🚉 運行情報</label></div>
       <div class="setting-item" style="padding-left: 30px;">
-        <label for="max-status-lines-input">└ 表示路線数</label>
+        <label for="max-status-lines-input">└ 1ページの表示件数</label>
         <input type="number" id="max-status-lines-input" min="1" max="50" value="2" style="width: 60px; text-align: center;">
       </div>
       <div class="setting-item"><label><input type="checkbox" id="toggle-weather"  checked> ☀️ 天気情報</label></div>
       <div class="setting-item"><label><input type="checkbox" id="toggle-news"     checked> 📰 ニュース</label></div>
       <div class="setting-item"><label><input type="checkbox" id="toggle-schedule" checked> 🚆 発車案内</label></div>
-      <div class="setting-item"><label><input type="checkbox" id="toggle-twitter"  checked> 🐦 Twitter</label></div>
 
       <!-- 色・フォント -->
       <h3>色・フォント設定</h3>
@@ -80,15 +79,9 @@
 
   <!-- 上段パネル -->
   <div id="top-panels">
-    <section id="status-card"   class="panel resizable-off"><h2>🚉 運行情報</h2><ul id="status-list"></ul></section>
+    <section id="status-card"   class="panel resizable-off"><h2>🚉 運行情報</h2><ul id="status-list"></ul><div id="status-meta" class="status-meta" aria-live="polite"></div></section>
     <section id="weather-card"  class="panel resizable-off"><h2>☀️ 天気情報</h2><div id="weather-info"></div></section>
     <div     id="news-ticker"   class="panel resizable-off"><span id="news-headline"></span></div>
-  </div>
-
-  <!-- Twitter -->
-  <div id="twitter-container" class="twitter-embed panel resizable-off">
-    <a class="twitter-timeline" data-theme="light" data-tweet-limit="3" href="https://twitter.com/tokyu_official">Tweets by tokyu_official</a>
-    <script async src="https://platform.twitter.com/widgets.js"></script>
   </div>
 
   <!-- 発車案内 -->
