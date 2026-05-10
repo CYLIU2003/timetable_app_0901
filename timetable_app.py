@@ -20,25 +20,29 @@ FULL SOURCE rev-2025-05-18  (★ CSV 対応版)
 
 import atexit
 from datetime import datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 import os
 import sqlite3
 import subprocess
-import html
 import requests
 import pandas as pd
-import feedparser
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, render_template, url_for, request  # request を追加
-import requests
 import logging
+
+from app_core.cache import file_mtime_ns
+from app_core.news_service import get_news
+from app_core.schedule_service import build_schedule_response
+from app_core.timetable_loader import load_csv_schedule_cached, load_excel_schedule_cached
+from app_core.weather_service import get_weather
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────
 #  ディレクトリ・ファイルパス定義
@@ -90,96 +94,10 @@ def fetch_train_schedule(line_code: str, dest_tag: str) -> list[dict[str, str]]:
     today_tag = _DAY_MAP[datetime.now().weekday()]
     csv_path  = DATA_DIR / f"timetable_{line_code}_{today_tag}_{dest_tag}.csv"
 
-    # ブルーライン用のデバッグ出力を追加
-    if line_code == "BL":
-        print(f"[DEBUG] 読み込み試行: {csv_path} (存在: {csv_path.exists()})")
-
     if not csv_path.exists():
-        print(f"[WARN] CSV not found: {csv_path}")
+        logger.warning("CSV not found: %s", csv_path)
         return []
-
-    # 2) CSV 読込
-    df = None
-    try:
-        # header=0 を明示し、1行目をヘッダーとして扱う
-        # keep_default_na=False で、空欄を空文字列として読み込む
-        # dtype=str を追加して、すべての列を文字列として読み込むことで、予期せぬ型変換を防ぐ
-        df = pd.read_csv(csv_path, encoding="utf-8", header=0, keep_default_na=False, dtype=str)
-    except UnicodeDecodeError:
-        try:
-            df = pd.read_csv(csv_path, encoding="cp932", header=0, keep_default_na=False, dtype=str)
-        except Exception as e_cp932:
-            print(f"[ERROR] CSV read error (cp932): {csv_path} - {e_cp932}")
-            return []
-    except Exception as e:
-        print(f"[ERROR] CSV read error (utf-8): {csv_path} - {e}")
-        return []
-
-    if df is None or df.empty:
-        # print(f"[INFO] CSV is empty or failed to load: {csv_path}") # 既に読み込み失敗時にエラーが出るため、重複を避ける
-        return []
-
-    # 3) 時刻・種別・行き先抽出
-    out: list[dict[str, str]] = []
-    
-    num_columns = len(df.columns)
-    if num_columns == 0:
-        print(f"[WARN] CSV has no columns: {csv_path}")
-        return []
-
-    # デバッグ用に列名を出力したい場合は以下のコメントを解除
-    # print(f"[DEBUG] CSV Columns for {csv_path}: {df.columns.tolist()}") 
-
-    for index, row in df.iterrows():
-        try:
-            time_str = str(row.iloc[0]).strip()
-            if not time_str:
-                # print(f"[DEBUG] Skipping row due to empty time: {row.to_list()} in {csv_path}")
-                continue
-            
-            try:
-                # "H:MM" または "HH:MM" 形式をパースし、"HH:MM" に正規化
-                parts = time_str.split(':')
-                if len(parts) == 2:
-                    h, m = int(parts[0]), int(parts[1])
-                    formatted_time = f"{h:02d}:{m:02d}"
-                    datetime.strptime(formatted_time, "%H:%M") # 正当性チェック
-                else:
-                    # print(f"[DEBUG] Skipping row due to invalid time format '{time_str}': {row.to_list()} in {csv_path}")
-                    continue
-            except ValueError:
-                # print(f"[DEBUG] Skipping row due to invalid time format '{time_str}': {row.to_list()} in {csv_path}")
-                continue
-
-            train_type = ""
-            if num_columns > 1:
-                train_type = str(row.iloc[1]).strip()
-            
-            destination = ""
-            if num_columns > 2:
-                destination = str(row.iloc[2]).strip()
-            
-            if train_type.lower() in ["nan", "na", "<na>", "-", "ー"]: train_type = ""
-            if destination.lower() in ["nan", "na", "<na>", "-", "ー"]: destination = ""
-
-            out.append({
-                "time": formatted_time,
-                "type": train_type,
-                "dest": destination
-            })
-        except (ValueError, TypeError) as e_parse:
-            # print(f"[DEBUG] Skipping row due to parse error ({e_parse}): {row.to_list()} in {csv_path}")
-            pass
-        except IndexError as e_index: 
-            # print(f"[DEBUG] Skipping row due to IndexError ({e_index}): {row.to_list()} in {csv_path}")
-            pass
-            
-    if not out and not df.empty: # CSVにデータ行はあるが、有効な時刻情報が抽出できなかった場合
-        print(f"[INFO] No valid schedule entries extracted from {csv_path}. Please check CSV format (time in 1st col, etc.) and content.")
-        # さらに詳細なデバッグが必要な場合、以下のコメントを解除
-        # print(f"[DEBUG] First 5 rows of CSV {csv_path} that might have issues:\n{df.head().to_string()}")
-
-    return sorted(out, key=lambda x: x["time"])
+    return load_csv_schedule_cached(str(csv_path), file_mtime_ns(csv_path))
 
 
 # ──────────────────────────────────────────
@@ -187,32 +105,10 @@ def fetch_train_schedule(line_code: str, dest_tag: str) -> list[dict[str, str]]:
 # ──────────────────────────────────────────
 def fetch_bus_schedule(sheet: str, col: str, path: Path) -> list[str]:
     """バス時刻表（行方向：時、列方向：分）を HH:MM リストで返す"""
-    # --- デバッグ: 実際のシート名一覧を出力 ---
-    try:
-        print(f"[DEBUG] Excelファイル: {path}")
-        print(f"[DEBUG] シート一覧: {pd.ExcelFile(path).sheet_names}")
-    except Exception as e:
-        print(f"[ERROR] Excelファイル/シート一覧取得失敗: {e}")
-    
-    print(f"[DEBUG] 読み込みシート名: {sheet}")
-    df = pd.read_excel(path, sheet_name=sheet)
-    print(f"[DEBUG] 読み込んだ列名: {df.columns.tolist()}")
-    if "時" not in df.columns:
-        df.rename(columns={df.columns[0]: "時"}, inplace=True)
-    if col not in df.columns:
-        print(f"[WARN] 指定列 '{col}' が見つかりません。第2列 '{df.columns[1]}' を使用します。")
-        col = df.columns[1]
-    else:
-        print(f"[DEBUG] 使用列: {col}")
-    out = []
-    for _, row in df.iterrows():
-        h = str(row["時"]).strip()
-        if not h.isdigit() or pd.isna(row[col]):
-            continue
-        for m in str(row[col]).split():
-            if m.isdigit():
-                out.append(f"{h.zfill(2)}:{m.zfill(2)}")
-    return out
+    if not path.exists():
+        logger.warning("Excel timetable not found: %s", path)
+        return []
+    return load_excel_schedule_cached(str(path), file_mtime_ns(path), sheet, col)
 
 
 def sheet_name(kind: str, key: Optional[str] = None) -> str:
@@ -254,66 +150,10 @@ def fetch_bus_schedule_csv(bus_type: str, dest_tag: str) -> list[dict[str, str]]
     # CSVファイルパス
     csv_path = DATA_DIR / f"timetable_BUS_{day_tag}_{dest_tag}.csv"
     
-    print(f"[DEBUG] バスCSV読み込み試行: {csv_path} (存在: {csv_path.exists()})")
-    
     if not csv_path.exists():
-        print(f"[WARN] バスCSV not found: {csv_path}")
+        logger.warning("バスCSV not found: %s", csv_path)
         return []
-    
-    # CSV読込
-    df = None
-    try:
-        df = pd.read_csv(csv_path, encoding="utf-8", header=0, keep_default_na=False, dtype=str)
-    except UnicodeDecodeError:
-        try:
-            df = pd.read_csv(csv_path, encoding="cp932", header=0, keep_default_na=False, dtype=str)
-        except Exception as e_cp932:
-            print(f"[ERROR] バスCSV read error (cp932): {csv_path} - {e_cp932}")
-            return []
-    except Exception as e:
-        print(f"[ERROR] バスCSV read error (utf-8): {csv_path} - {e}")
-        return []
-    
-    if df is None or df.empty:
-        return []
-    
-    # 時刻・行き先抽出
-    out = []
-    for _, row in df.iterrows():
-        try:
-            time_str = str(row.iloc[0]).strip()
-            if not time_str:
-                continue
-            
-            # 時刻のフォーマット
-            try:
-                parts = time_str.split(':')
-                if len(parts) == 2:
-                    h, m = int(parts[0]), int(parts[1])
-                    formatted_time = f"{h:02d}:{m:02d}"
-                    datetime.strptime(formatted_time, "%H:%M")  # 正当性チェック
-                else:
-                    continue
-            except ValueError:
-                continue
-            
-            # 行き先
-            destination = ""
-            if len(df.columns) > 1:
-                destination = str(row.iloc[1]).strip()
-            
-            if destination.lower() in ["nan", "na", "<na>", "-", "ー"]:
-                destination = ""
-            
-            out.append({
-                "time": formatted_time,
-                "type": "",  # バスの種別は空
-                "dest": destination
-            })
-        except (ValueError, TypeError, IndexError):
-            pass
-    
-    return sorted(out, key=lambda x: x["time"])
+    return load_csv_schedule_cached(str(csv_path), file_mtime_ns(csv_path))
 
 
 # ──────────────────────────────────────────
@@ -424,111 +264,25 @@ ROUTES = [
 # ──────────────────────────────────────────
 @app.route("/api/schedule")
 def api_schedule():
-    labs = ["先発", "次発", "次々発"]
-    res = {"current_time": datetime.now().strftime("%H:%M:%S"), "routes": []}
-
-    for r in ROUTES:
-        # travel = "(所要時間:15分)" if r["type"] == "train" else "(所要時間:10分)" # この行は削除またはコメントアウト
-        # label = f"{r['label']} {travel}" # この行は削除またはコメントアウト
-        # label は ROUTES で定義されたものをそのまま使うか、所要時間を動的に表示するなら別途考慮
-        ent = {"label": r['label']} # travel情報を削除
-        mp = {}
-
-        for d in r.get("directions", []):
-            if r["type"] == "train":
-                lst = fetch_train_schedule(r["line_code"], d["dest_tag"])
-            elif r["type"] == "bus_csv":
-                lst = fetch_bus_schedule_csv(r["type"], d["dest_tag"])
-            else:
-                sh  = sheet_name(r["type"], d.get("sheet_direction"))
-                lst = fetch_bus_schedule(sh, d["column"], r["file"])
-
-            # --- ここから修正: 今から早い順に並べてmax件だけ表示 ---
-            filtered = []
-            for item in lst:
-                if isinstance(item, dict):
-                    current_time_str = item["time"]
-                elif isinstance(item, str):
-                    current_time_str = item
-                else:
-                    continue
-                rm = remaining(current_time_str)
-                if not (0 < rm.total_seconds() < 86400):
-                    continue
-                mins = int(rm.total_seconds() // 60)
-                if mins < r["run"]:
-                    continue
-                filtered.append((rm, item, mins, current_time_str))
-            # 残り時間の昇順でソート
-            filtered.sort(key=lambda x: x[0])
-            show, cnt = [], 0
-            for tup in filtered:
-                if cnt >= r["max"]:
-                    break
-                _, item, mins, current_time_str = tup
-                adv = "歩けば間に合います" if mins >= r["walk"] else "走れば間に合います"
-                display_parts = [f"{current_time_str}発"]
-                if isinstance(item, dict):
-                    train_type = item.get("type", "").strip()
-                    destination = item.get("dest", "").strip()
-                    if train_type and train_type not in ["-", "ー"]:
-                        display_parts.append(f"【{train_type}】")
-                    if destination and destination not in ["-", "ー"]:
-                        display_parts.append(f"{destination}行")
-                display_parts.append(f"- {mins}分 {adv}")
-                show.append(f"{labs[cnt]}: {' '.join(display_parts)}")
-                cnt += 1
-            mp[d["column"]] = show
-        ent["schedules"] = mp
-        res["routes"].append(ent)
-
-    return jsonify(res)
-
-# ──────────────────────────────────────────
-#  API: 天気情報
-# ──────────────────────────────────────────
-W_URL = "https://weather.tsukumijima.net/api/forecast/city/130010"
-
-
-def get_weather() -> dict:
-    try:
-        return requests.get(W_URL, timeout=6).json()
-    except Exception as e:
-        print("Weather error:", e)
-        return {}
-
+    return jsonify(
+        build_schedule_response(
+            ROUTES,
+            DATA_DIR,
+            remaining,
+            fetch_train_schedule,
+            fetch_bus_schedule_csv,
+            fetch_bus_schedule,
+            sheet_name,
+        )
+    )
 
 @app.route("/api/weather")
 def api_weather():
     return jsonify(get_weather())
 
-# ──────────────────────────────────────────
-#  API: ニュース
-# ──────────────────────────────────────────
-NHK = "https://www3.nhk.or.jp/rss/news/cat0.xml"
-GGL = "https://news.google.com/rss/search?q=東急&hl=ja&gl=JP&ceid=JP:ja"
-
-
-def get_news() -> list[str]:
-    out, seen = [], set()
-    for url in (NHK, GGL):
-        try:
-            feed = feedparser.parse(url)
-            for e in feed.entries[:5]:
-                t = html.unescape(e.title)
-                if t not in seen:
-                    out.append(t)
-                    seen.add(t)
-                if len(out) >= 10:
-                    break
-        except Exception:
-            pass
-    return out
-
-
 @app.route("/api/news")
 def api_news():
-    return jsonify({"news": get_news()})
+    return jsonify(get_news())
 
 # ──────────────────────────────────────────
 #  API: 運行情報 (Tokyu + ODPT)
@@ -913,13 +667,26 @@ def build_status_rows_live() -> tuple[list[dict[str, object]], str]:
     return rows, snapshot_at
 
 
-def format_status_response(rows: list[dict[str, object]], page: int, page_size: int, updated_at: str, source: str) -> dict[str, object]:
+def format_status_response(
+    rows: list[dict[str, object]],
+    page: int,
+    page_size: int,
+    updated_at: str,
+    source: str,
+    include_all: bool = False,
+) -> dict[str, object]:
     total_count = len(rows)
-    total_pages = (total_count + page_size - 1) // page_size if total_count else 0
-    if total_pages and page >= total_pages:
-        page = total_pages - 1
-    start = page * page_size
-    page_rows = rows[start:start + page_size]
+    if include_all:
+        page = 0
+        total_pages = 1 if total_count else 0
+        page_rows = rows
+        page_size = total_count if total_count else page_size
+    else:
+        total_pages = (total_count + page_size - 1) // page_size if total_count else 0
+        if total_pages and page >= total_pages:
+            page = total_pages - 1
+        start = page * page_size
+        page_rows = rows[start:start + page_size]
     return {
         "status": [
             {
@@ -1062,6 +829,7 @@ def api_status():
         page = int(request.args.get('page', 0))
     except (ValueError, TypeError):
         page = 0
+    all_requested = request.args.get("all", "0").lower() in {"1", "true", "yes"}
 
     if page_size < 1:
         page_size = 1
@@ -1076,6 +844,7 @@ def api_status():
             page_size,
             str(cached_snapshot["updated_at"]),
             str(cached_snapshot["source"]),
+            include_all=all_requested,
         ))
 
     live_rows, updated_at = build_status_rows_live()
@@ -1085,7 +854,14 @@ def api_status():
         except Exception as e:
             logging.warning(f"failed to persist live status snapshot: {e}")
 
-    return jsonify(format_status_response(live_rows, page, page_size, updated_at, "live" if live_rows else "unavailable"))
+    return jsonify(format_status_response(
+        live_rows,
+        page,
+        page_size,
+        updated_at,
+        "live" if live_rows else "unavailable",
+        include_all=all_requested,
+    ))
 
 # ──────────────────────────────────────────
 #  ルート

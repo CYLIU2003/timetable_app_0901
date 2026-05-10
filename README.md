@@ -78,7 +78,7 @@ app_20250808_remote/
 
 ## 起動方法
 1. 必要なPythonパッケージをインストール
-   - `pip install flask pandas requests beautifulsoup4 feedparser openpyxl`
+  - `pip install flask pandas requests beautifulsoup4 feedparser openpyxl pytest`
 2. Rust toolchain をインストール
   - `winget install -e --id Rustlang.Rustup`
   - `cargo` 実行時は `C:\msys64\mingw64\bin` を PATH に含めるか、MSYS2 MinGW x64 シェルを使ってください。
@@ -94,6 +94,14 @@ app_20250808_remote/
 6. `timetable_data/`に必要なCSV/Excelを配置
 7. サーバ起動
   - `python timetable_app.py`
+
+## 性能測定とテスト
+
+- 起動後に以下で各APIの応答時間を測定できます。
+  - `python scripts/benchmark_endpoints.py --base-url http://127.0.0.1:5000`
+- API契約テストは以下で実行します。
+  - `pytest`
+- ベンチマーク結果は各エンドポイントごとに平均、p95、最大値を表示します。
 
 ### ODPT ポーラー
 - Flask は `ODPT_POLLER_EXECUTABLE` に指定した Rust バイナリが存在する場合、自動で起動します。

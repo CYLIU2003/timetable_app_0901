@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <title>発車案内＋運行情報</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body data-page="{{ page }}">
@@ -39,7 +38,7 @@
       </div>
 
       <!-- 表示 ON/OFF -->
-      <h3>表示項目</h3>
+      <h3>表示</h3>
       <div class="setting-item"><label><input type="checkbox" id="toggle-status"   checked> 🚉 運行情報</label></div>
       <div class="setting-item" style="padding-left: 30px;">
         <label for="max-status-lines-input">└ 1ページの表示件数</label>
@@ -50,7 +49,7 @@
       <div class="setting-item"><label><input type="checkbox" id="toggle-schedule" checked> 🚆 発車案内</label></div>
 
       <!-- 色・フォント -->
-      <h3>色・フォント設定</h3>
+      <h3>テーマ</h3>
       <div class="setting-item"><label>運行 BG <input type="color" id="color-status-bg" value="#ffffff"></label><label>文字 <input type="color" id="color-status-text" value="#000000"></label></div>
       <div class="setting-item"><label>天気 BG <input type="color" id="color-weather-bg" value="#ffffff"></label><label>文字 <input type="color" id="color-weather-text" value="#000000"></label></div>
       <div class="setting-item"><label>ニュース BG <input type="color" id="color-news-bg" value="#ffffff"></label><label>文字 <input type="color" id="color-news-text" value="#000000"></label></div>
@@ -66,7 +65,7 @@
       </div>
 
       <!-- 発車案内設定 -->
-      <h3>発車案内設定</h3>
+      <h3>路線</h3>
       <div class="setting-item">
         <p style="margin:0;">✔︎表示路線 ＋ 本数（何本先まで）</p>
         <div id="route-selector-container" style="max-height:140px;overflow:auto;border:1px solid #ccc;padding:4px;"></div>
